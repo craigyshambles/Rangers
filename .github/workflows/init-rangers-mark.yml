@@ -853,3 +853,81 @@ EOF
 
       - name: Done
         run: echo "Initialization complete. Check your repository for new files."
+
+        name: Init Rangers Mark project
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  init:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create basic files
+        run: |
+          set -euo pipefail
+          mkdir -p scripts data .github/workflows output
+
+          # Create index.html if missing
+          if [ ! -f index.html ]; then
+            cat > index.html <<'HTML'
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>Rangers Mark</title></head><body><h1>RANGERS MARK (placeholder)</h1><p>Add your index.html contents here.</p></body></html>
+HTML
+            echo "Created index.html"
+          else
+            echo "index.html already exists"
+          fi
+
+          # Create sample data if missing
+          if [ ! -f data/players.sample.json ]; then
+            cat > data/players.sample.json <<'JSON'
+[
+  { "name": "Ally McCoist", "aliases": ["Ally McCoist"], "nationality": "Scotland", "positions": ["Striker"], "firstYear": 1983, "lastYear": 2001, "clubLegend": true, "sources": ["https://en.wikipedia.org/wiki/Ally_McCoist"] }
+]
+JSON
+            echo "Created data/players.sample.json"
+          else
+            echo "data/players.sample.json already exists"
+          fi
+
+          # Create placeholder scraper script
+          if [ ! -f scripts/scrape-rangers-players-enriched.js ]; then
+            cat > scripts/scrape-rangers-players-enriched.js <<'JS'
+/* Placeholder scraper. Replace with full script locally. */
+console.log("Run the full scraper locally after adding dependencies: axios, cheerio, fs-extra, p-limit");
+JS
+            echo "Created scripts/scrape-rangers-players-enriched.js"
+          else
+            echo "scripts/scrape-rangers-players-enriched.js already exists"
+          fi
+
+          # Create output placeholder
+          if [ ! -f output/.gitkeep ]; then
+            touch output/.gitkeep
+            echo "Created output/.gitkeep"
+          else
+            echo "output/.gitkeep already exists"
+          fi
+
+      - name: Commit created files
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add index.html data scripts output || true
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore: init Rangers Mark basic files"
+            git push origin HEAD:${{ github.ref_name }}
+          fi
