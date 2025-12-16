@@ -1,0 +1,855 @@
+name: Init Rangers Mark project
+
+on:
+  workflow_dispatch:
+
+jobs:
+  init:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create project files
+        run: |
+          set -euo pipefail
+
+          # helper: write if not exists
+          write_if_missing() {
+            file="$1"
+            shift
+            if [ -e "$file" ]; then
+              echo "SKIP: $file already exists"
+            else
+              mkdir -p "$(dirname "$file")"
+              cat > "$file" <<'EOF'
+$*
+EOF
+              echo "CREATED: $file"
+            fi
+          }
+
+          # index.html
+          if [ -e "index.html" ]; then
+            echo "SKIP: index.html exists"
+          else
+            mkdir -p .
+            cat > index.html <<'EOF'
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Rangers Mark — Daily Guessing Game</title>
+  <style>
+    :root{
+      --rangers-blue:#0046ad;
+      --rangers-red:#e10600;
+      --bg-dark:#0b1d3a;
+      --white:#ffffff;
+      --green:#2ecc71;
+      --yellow:#f1c40f;
+      --grey:#7f8c8d;
+      --glass: rgba(255,255,255,0.05);
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{
+      margin:0;
+      font-family:Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+      background:linear-gradient(180deg,var(--bg-dark),var(--rangers-blue));
+      color:var(--white);
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      padding:24px;
+      -webkit-font-smoothing:antialiased;
+      -moz-osx-font-smoothing:grayscale;
+    }
+
+    .app{
+      width:100%;
+      max-width:520px;
+      background:var(--glass);
+      border-radius:14px;
+      padding:20px;
+      box-shadow:0 10px 30px rgba(0,0,0,0.45);
+    }
+
+    h1{margin:0;font-size:1.6rem;text-align:center;letter-spacing:1px}
+    .tagline{text-align:center;opacity:.9;margin-top:6px;margin-bottom:14px;font-size:0.95rem}
+
+    .controls{display:grid;grid-template-columns:1fr 120px;gap:8px}
+    input[type="search"]{
+      padding:10px 12px;border-radius:10px;border:none;font-size:1rem;
+      background:rgba(255,255,255,0.04);color:var(--white);
+    }
+    button{
+      padding:10px;border-radius:10px;border:none;font-weight:700;
+      background:var(--rangers-red);color:var(--white);cursor:pointer;
+    }
+    button[disabled]{opacity:.6;cursor:not-allowed}
+
+    .meta{display:flex;justify-content:space-between;align-items:center;margin-top:12px;font-size:0.85rem;opacity:.9}
+    .legend{display:flex;gap:8px;align-items:center}
+    .legend .item{display:flex;gap:6px;align-items:center}
+    .chip{width:18px;height:18px;border-radius:4px;display:inline-block}
+
+    .guesses{margin-top:16px}
+    .guess-row{display:grid;grid-template-columns:1fr repeat(4,36px);gap:8px;align-items:center;margin-bottom:8px}
+    .player-name{font-size:0.95rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .cell{height:36px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-weight:700;background:rgba(255,255,255,0.04)}
+    .correct{background:var(--green);color:#000}
+    .partial{background:var(--yellow);color:#000}
+    .wrong{background:var(--grey);color:#000}
+
+    .footer{margin-top:14px;text-align:center;opacity:.9;font-size:0.85rem;display:flex;justify-content:space-between;align-items:center;gap:12px}
+    .share-btn{background:transparent;border:1px solid rgba(255,255,255,0.08);padding:6px 10px;border-radius:8px;color:var(--white);cursor:pointer}
+
+    .status{font-weight:700}
+
+    .suggestions { margin-top:6px; color:var(--yellow); font-size:0.9rem; opacity:0.95 }
+    @media (max-width:420px){
+      .controls{grid-template-columns:1fr 96px}
+      .guess-row{grid-template-columns:1fr repeat(4,30px)}
+    }
+  </style>
+  <!-- Fuse.js for fuzzy search -->
+  <script src="https://unpkg.com/fuse.js@6.6.2/dist/fuse.min.js"></script>
+</head>
+<body>
+  <div class="app" role="application" aria-labelledby="title">
+    <h1 id="title">RANGERS MARK</h1>
+    <div class="tagline">Guess the Rangers player — 6 attempts</div>
+
+    <div class="controls" aria-hidden="false">
+      <div>
+        <label for="guessInput" class="sr-only" style="display:none">Enter player name</label>
+        <input id="guessInput" type="search" placeholder="Start typing a player name…" autocomplete="off" aria-autocomplete="list" />
+        <div id="suggestions" class="suggestions" aria-hidden="true"></div>
+      </div>
+      <button id="submitBtn">Submit</button>
+    </div>
+
+    <div class="meta" aria-hidden="false">
+      <div class="legend" aria-hidden="true">
+        <div class="item"><span class="chip correct" aria-hidden="true"></span>Correct</div>
+        <div class="item"><span class="chip partial" aria-hidden="true"></span>Present (hint)</div>
+        <div class="item"><span class="chip wrong" aria-hidden="true"></span>Wrong</div>
+      </div>
+      <div class="status" id="attempts">0/6</div>
+    </div>
+
+    <div class="guesses" id="guesses" aria-live="polite"></div>
+
+    <div class="footer">
+      <div class="note" id="footerNote">🔵 Loading players…</div>
+      <div>
+        <button class="share-btn" id="shareBtn">Share</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    /* --- CONFIG --- */
+    const MAX_ATTEMPTS = 6;
+    const STORAGE_KEY_PREFIX = "rangers-mark-";
+
+    /* --- STATE --- */
+    let PLAYERS = []; // populated after load
+    let nameMap = new Map();
+    let fuse;         // Fuse instance
+    let dailyPlayer;
+    let state;        // { guesses: [] }
+
+    const guessesEl = document.getElementById("guesses");
+    const attemptsEl = document.getElementById("attempts");
+    const footerNote = document.getElementById("footerNote");
+    const submitBtn = document.getElementById("submitBtn");
+    const shareBtn = document.getElementById("shareBtn");
+    const input = document.getElementById("guessInput");
+    const suggestionsEl = document.getElementById("suggestions");
+
+    function todayKey() {
+      const d = new Date();
+      return d.toISOString().slice(0,10);
+    }
+
+    function seededIndex(seedStr, max) {
+      let h = 2166136261 >>> 0;
+      for (let i = 0; i < seedStr.length; i++) {
+        h ^= seedStr.charCodeAt(i);
+        h = Math.imul(h, 16777619) >>> 0;
+      }
+      return h % max;
+    }
+
+    function compare(a, b) {
+      if (a === b) return "correct";
+      if (typeof a === "string" && typeof b === "string") return "partial";
+      return "wrong";
+    }
+
+    function storageKey() { return STORAGE_KEY_PREFIX + todayKey(); }
+    function loadState() {
+      const raw = localStorage.getItem(storageKey());
+      return raw ? JSON.parse(raw) : { guesses: [] };
+    }
+    function saveState(s) { localStorage.setItem(storageKey(), JSON.stringify(s)); }
+
+    function renderGuessRow(player){
+      const row = document.createElement("div");
+      row.className = "guess-row";
+      const nameDiv = document.createElement("div");
+      nameDiv.className = "player-name";
+      nameDiv.textContent = player.name;
+      row.appendChild(nameDiv);
+
+      const keys = ["nationality","position","era","clubLegend"];
+      keys.forEach(k=>{
+        const c = document.createElement("div");
+        const cls = compare(player[k], dailyPlayer[k]);
+        c.className = "cell " + cls;
+        const labels = { nationality: "N", position: "P", era: "E", clubLegend: "L" };
+        c.textContent = labels[k];
+        row.appendChild(c);
+      });
+      return row;
+    }
+
+    function updateUI() {
+      guessesEl.innerHTML = "";
+      state.guesses.forEach(g=>{
+        guessesEl.appendChild(renderGuessRow(g));
+      });
+      attemptsEl.textContent = state.guesses.length + "/" + MAX_ATTEMPTS;
+    }
+
+    function shareTextFromState() {
+      const emoji = { correct: "🟩", partial: "🟨", wrong: "⬜" };
+      const lines = state.guesses.map(p => {
+        const parts = ["nationality","position","era","clubLegend"].map(k => emoji[compare(p[k], dailyPlayer[k])]);
+        return parts.join("");
+      });
+      const title = `Rangers Mark — ${todayKey()}`;
+      return [title, `${state.guesses.length}/${MAX_ATTEMPTS}`, "", ...lines].join("\n");
+    }
+
+    // Attempt to fetch enriched JSON, fallback to sample
+    async function loadPlayerData() {
+      const paths = ['/data/players.enriched.json', '/data/players.sample.json'];
+      for (const p of paths) {
+        try {
+          const resp = await fetch(p, { cache: "no-store" });
+          if (!resp.ok) throw new Error('not found');
+          const json = await resp.json();
+          return json;
+        } catch (err) {
+          // try next
+        }
+      }
+      throw new Error('No player data found at /data/players.enriched.json or /data/players.sample.json');
+    }
+
+    function buildMapsAndFuse(list) {
+      // normalize and build alias map
+      nameMap = new Map();
+      const fuseList = [];
+      list.forEach(p => {
+        const rec = {
+          name: p.name,
+          aliases: Array.isArray(p.aliases) ? p.aliases : [p.name],
+          nationality: p.nationality || null,
+          positions: p.positions || [],
+          firstYear: p.firstYear || null,
+          lastYear: p.lastYear || null,
+          clubLegend: !!p.clubLegend,
+          sources: p.sources || []
+        };
+
+        // compute short derived fields for game use
+        rec.position = rec.positions.length ? rec.positions[0] : null;
+        if (rec.firstYear && rec.lastYear) {
+          rec.era = `${Math.floor(rec.firstYear/10)*10}s`;
+        } else if (rec.firstYear) {
+          rec.era = `${Math.floor(rec.firstYear/10)*10}s`;
+        } else {
+          rec.era = null;
+        }
+
+        PLAYERS.push(rec);
+
+        // add lookup keys
+        rec.aliases.forEach(a => nameMap.set(a.toLowerCase(), rec));
+        nameMap.set(rec.name.toLowerCase(), rec);
+
+        // prepare fuse list entries (search by name and aliases)
+        fuseList.push({
+          name: rec.name,
+          aliases: rec.aliases.join(" | "),
+          ref: rec.name
+        });
+      });
+
+      // Fuse options: search name and aliases
+      fuse = new Fuse(fuseList, {
+        keys: ['name','aliases'],
+        includeScore: true,
+        threshold: 0.35,
+        minMatchCharLength: 2
+      });
+    }
+
+    function pickDaily() {
+      if (PLAYERS.length === 0) return null;
+      const idx = seededIndex(todayKey(), PLAYERS.length);
+      return PLAYERS[idx];
+    }
+
+    function findPlayerByInput(inputText) {
+      if (!inputText) return null;
+      const key = inputText.trim().toLowerCase();
+      if (nameMap.has(key)) return nameMap.get(key);
+      // fuzzy search
+      const res = fuse.search(inputText, { limit: 6 });
+      if (res && res.length) {
+        const bestRef = res[0].item.ref;
+        return PLAYERS.find(p => p.name === bestRef);
+      }
+      return null;
+    }
+
+    function showSuggestions(q) {
+      if (!q || q.trim().length < 2) {
+        suggestionsEl.textContent = '';
+        suggestionsEl.style.display = 'none';
+        return;
+      }
+      const res = fuse.search(q, { limit: 6 });
+      if (!res.length) { suggestionsEl.textContent = 'No suggestions'; suggestionsEl.style.display = 'block'; return; }
+      suggestionsEl.innerHTML = res.map(r => `${r.item.name}`).join(" • ");
+      suggestionsEl.style.display = 'block';
+    }
+
+    function setFooterNote(txt) {
+      footerNote.textContent = txt;
+    }
+
+    async function submitGuess() {
+      const raw = input.value.trim();
+      if (!raw) return setFooterNote("Enter a name first");
+      const player = findPlayerByInput(raw);
+      if (!player) {
+        setFooterNote("Player not found in dataset — try another spelling");
+        return;
+      }
+
+      // prevent duplicate guesses
+      if (state.guesses.some(g => g.name.toLowerCase() === player.name.toLowerCase())){
+        input.value = "";
+        return setFooterNote("You already guessed that player");
+      }
+
+      if (state.guesses.length >= MAX_ATTEMPTS){
+        return setFooterNote("No attempts left");
+      }
+
+      // push compact guess object for display
+      const guessObj = {
+        name: player.name,
+        nationality: player.nationality,
+        position: player.position,
+        era: player.era,
+        clubLegend: player.clubLegend
+      };
+
+      state.guesses.push(guessObj);
+      saveState(state);
+      updateUI();
+      input.value = "";
+
+      const win = player.name.toLowerCase() === dailyPlayer.name.toLowerCase();
+      if (win){
+        setFooterNote("Correct! 🔵⚪️🔴");
+        submitBtn.disabled = true;
+      } else if (state.guesses.length >= MAX_ATTEMPTS){
+        setFooterNote(`Out of attempts — today's player was ${dailyPlayer.name}`);
+        submitBtn.disabled = true;
+      } else {
+        setFooterNote("Try again");
+      }
+    }
+
+    // Share action
+    async function onShare() {
+      const body = shareTextFromState();
+      try {
+        await navigator.clipboard.writeText(body);
+        setFooterNote("Result copied to clipboard!");
+      } catch (err) {
+        window.prompt("Copy your result:", body);
+      }
+    }
+
+    // Initialization flow
+    (async function init() {
+      try {
+        const rawPlayers = await loadPlayerData();
+        // reset
+        PLAYERS = [];
+        buildMapsAndFuse(rawPlayers);
+        dailyPlayer = pickDaily();
+
+        // construct dailyPlayer expected structure used by compare()
+        const dp = {
+          name: dailyPlayer.name,
+          nationality: dailyPlayer.nationality,
+          position: dailyPlayer.position,
+          era: dailyPlayer.era,
+          clubLegend: dailyPlayer.clubLegend
+        };
+        dailyPlayer = dp;
+
+        state = loadState();
+        // If stored state is for different day (shouldn't happen because key includes date) start fresh
+        updateUI();
+
+        // check win/out of attempts
+        if (state.guesses.some(g => g.name.toLowerCase() === dailyPlayer.name.toLowerCase())){
+          setFooterNote("✅ You already found today's player!");
+          submitBtn.disabled = true;
+        } else if (state.guesses.length >= MAX_ATTEMPTS){
+          setFooterNote(`❌ Out of attempts. Today's was ${dailyPlayer.name}`);
+          submitBtn.disabled = true;
+        } else {
+          setFooterNote("🔵 READY");
+          submitBtn.disabled = false;
+        }
+
+        // wire events
+        submitBtn.addEventListener("click", submitGuess);
+        shareBtn.addEventListener("click", onShare);
+        input.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") { e.preventDefault(); submitGuess(); }
+        });
+        input.addEventListener("input", (e) => showSuggestions(e.target.value));
+        input.addEventListener("blur", (e) => setTimeout(()=>{ suggestionsEl.style.display='none'; }, 150));
+
+        console.log("Loaded players:", PLAYERS.length, "Daily player:", dailyPlayer.name);
+      } catch (err) {
+        console.error(err);
+        setFooterNote("Failed to load player data — see console");
+      }
+    })();
+  </script>
+</body>
+</html>
+EOF
+          fi
+
+          # scripts/scrape-rangers-players-enriched.js
+          if [ -e "scripts/scrape-rangers-players-enriched.js" ]; then
+            echo "SKIP: scripts/scrape-rangers-players-enriched.js exists"
+          else
+            mkdir -p scripts
+            cat > scripts/scrape-rangers-players-enriched.js <<'EOF'
+/**
+ * scrape-rangers-players-enriched.js
+ *
+ * Enhanced Node.js scraper to produce a deduplicated, enriched players.json
+ * for all Rangers F.C. first-team players (Wikipedia-first approach).
+ *
+ * Usage:
+ *   npm init -y
+ *   npm install axios cheerio p-limit fs-extra
+ *   node scripts/scrape-rangers-players-enriched.js
+ *
+ * Output: ./output/players.enriched.json
+ *
+ * NOTE: Inspect and respect target sites' robots.txt and terms of service.
+ */
+
+const axios = require("axios");
+const cheerio = require("cheerio");
+const pLimit = require("p-limit");
+const fs = require("fs-extra");
+const path = require("path");
+
+const OUTPUT_DIR = path.resolve(process.cwd(), "output");
+const CACHE_DIR = path.resolve(process.cwd(), "cache", "wiki");
+const OUTPUT_FILE = path.join(OUTPUT_DIR, "players.enriched.json");
+const WIKI_BASE = "https://en.wikipedia.org";
+const WIKI_LIST_URL = `${WIKI_BASE}/wiki/List_of_Rangers_F.C._players`;
+
+// Config
+const USER_AGENT = "RangersMark-Scraper/1.0 (+https://example.com)";
+const CONCURRENCY = 4;
+const REQUEST_DELAY_MS = 600; // polite delay
+
+fs.ensureDirSync(OUTPUT_DIR);
+fs.ensureDirSync(CACHE_DIR);
+
+async function sleep(ms) { return new Promise(r=>setTimeout(r,ms)); }
+
+async function fetchHtml(url, retries = 2) {
+  const safeFile = cacheFilenameForUrl(url);
+  if (await fs.pathExists(safeFile)) {
+    return fs.readFile(safeFile, "utf8");
+  }
+  try {
+    const res = await axios.get(url, {
+      headers: { "User-Agent": USER_AGENT, Accept: "text/html,application/xhtml+xml" },
+      timeout: 20000,
+    });
+    await fs.writeFile(safeFile, res.data, "utf8");
+    return res.data;
+  } catch (err) {
+    if (retries > 0) {
+      await sleep(1200);
+      return fetchHtml(url, retries - 1);
+    }
+    console.error(`Failed to fetch ${url}: ${err.message}`);
+    return null;
+  }
+}
+
+function cacheFilenameForUrl(url) {
+  const name = encodeURIComponent(url).replace(/%/g, "");
+  return path.join(CACHE_DIR, `${name}.html`);
+}
+
+async function parseWikipediaList() {
+  const html = await fetchHtml(WIKI_LIST_URL);
+  if (!html) return [];
+  const $ = cheerio.load(html);
+  const players = new Map();
+  $("#mw-content-text a[href^='/wiki/']").each((i, el) => {
+    const href = $(el).attr("href");
+    const text = $(el).text().trim();
+    if (!href || !text) return;
+    if (/^\/wiki\/(Category:|Template:|Portal:|Help:|Special:|File:|Talk:|Wikipedia:)/.test(href)) return;
+    if (text.length < 3) return;
+    const key = text.toLowerCase();
+    if (!players.has(key)) {
+      players.set(key, { name: text, wikiHref: href, sources: [WIKI_LIST_URL, WIKI_BASE + href] });
+    } else {
+      const ex = players.get(key);
+      ex.sources = Array.from(new Set(ex.sources.concat([WIKI_LIST_URL, WIKI_BASE + href])));
+    }
+  });
+  const out = Array.from(players.values());
+  console.log(`Found ${out.length} candidate player links on the Wikipedia list (heuristic).`);
+  return out;
+}
+
+function extractFromPlayerPage(html, pageUrl) {
+  const $ = cheerio.load(html);
+  const result = { positions: [], nationality: null, rangersYears: { firstYear: null, lastYear: null }, clubLegend: false, pageUrl };
+  const infobox = $("table.infobox");
+  if (infobox.length) {
+    infobox.find("tr").each((i, el) => {
+      const th = $(el).find("th").first().text().trim().toLowerCase();
+      const td = $(el).find("td").first().text().trim();
+      if (!th || !td) return;
+      if (th.includes("position")) {
+        const parts = td.split(/[,\/\n]/).map(s => s.trim()).filter(Boolean);
+        result.positions = Array.from(new Set(result.positions.concat(parts)));
+      } else if (th.includes("nationality")) {
+        const nationality = td.replace(/\[[^\]]*\]/g, "").trim();
+        if (nationality) result.nationality = nationality.split(/[,;\/\n]/)[0].trim();
+      }
+    });
+  }
+
+  if (!result.nationality) {
+    $("#mw-normal-catlinks li a").each((i, el) => {
+      const cat = $(el).text().trim();
+      const m = cat.match(/^(.+?) footballers$/i);
+      if (m) result.nationality = m[1].trim();
+      if (/hall of fame/i.test(cat)) result.clubLegend = true;
+    });
+  }
+
+  if (!result.nationality) {
+    const lead = $("#mw-content-text .mw-parser-output > p").first().text();
+    if (lead) {
+      const m = lead.match(/\b(is|was|is a|is an|was a|is an? )\s+([A-Z][a-z]+|Scottish|English|Welsh|Northern Irish|Irish)\b/i);
+      if (m) result.nationality = m[2];
+    }
+  }
+
+  let foundYears = false;
+  $("table").each((ti, table) => {
+    if (foundYears) return;
+    const headers = [];
+    $(table).find("tr").first().find("th,td").each((hi, cell) => { headers.push($(cell).text().trim().toLowerCase()); });
+    const hasYears = headers.some(h => /year/.test(h));
+    const hasClub = headers.some(h => /club|team/.test(h));
+    if (!hasYears || !hasClub) return;
+    $(table).find("tr").slice(1).each((ri, row) => {
+      const cells = $(row).find("td");
+      if (cells.length < 2) return;
+      let yearIdx = -1, clubIdx = -1;
+      $(table).find("tr").first().find("th,td").each((hi, cell) => {
+        const txt = $(cell).text().trim().toLowerCase();
+        if (yearIdx === -1 && /year/.test(txt)) yearIdx = hi;
+        if (clubIdx === -1 && /club|team/.test(txt)) clubIdx = hi;
+      });
+      if (yearIdx === -1) yearIdx = 0;
+      if (clubIdx === -1) clubIdx = 1;
+      const yearCell = $(cells.get(yearIdx)) ? $(cells.get(yearIdx)).text().trim() : "";
+      const clubCell = $(cells.get(clubIdx)) ? $(cells.get(clubIdx)).text().trim() : "";
+      if (!clubCell) return;
+      if (/rangers/i.test(clubCell)) {
+        const m = yearCell.match(/([0-9]{4}).*?([0-9]{4})?/);
+        if (m) {
+          result.rangersYears.firstYear = parseInt(m[1],10);
+          result.rangersYears.lastYear = m[2] ? parseInt(m[2],10) : null;
+          foundYears = true;
+        } else {
+          const mm = yearCell.match(/([0-9]{4})/g);
+          if (mm && mm.length >= 1) {
+            result.rangersYears.firstYear = parseInt(mm[0],10);
+            if (mm.length >= 2) result.rangersYears.lastYear = parseInt(mm[mm.length-1],10);
+            foundYears = true;
+          }
+        }
+      }
+    });
+  });
+
+  const pageText = $("#mw-content-text").text();
+  if (/hall of fame/i.test(pageText) || /rangers hall of fame/i.test(pageText)) result.clubLegend = true;
+  return result;
+}
+
+async function enrichPlayer(player) {
+  const pageUrl = player.wikiHref && player.wikiHref.startsWith("http") ? player.wikiHref : WIKI_BASE + player.wikiHref;
+  const html = await fetchHtml(pageUrl);
+  if (!html) {
+    return { name: player.name, aliases: player.aliases || [player.name], nationality: null, positions: [], firstYear: null, lastYear: null, clubLegend: false, sources: player.sources || [pageUrl] };
+  }
+  await sleep(REQUEST_DELAY_MS);
+  const extracted = extractFromPlayerPage(html, pageUrl);
+  const positions = (extracted.positions || []).map(s => s.replace(/\[.*?\]/g,"").trim()).filter(Boolean);
+  const firstYear = extracted.rangersYears.firstYear || null;
+  const lastYear = extracted.rangersYears.lastYear || null;
+  let nationality = extracted.nationality || null;
+  if (nationality) nationality = nationality.trim();
+  const clubLegend = !!extracted.clubLegend;
+  return {
+    name: player.name,
+    aliases: player.aliases && player.aliases.length ? player.aliases : [player.name],
+    nationality,
+    positions,
+    firstYear,
+    lastYear,
+    clubLegend,
+    sources: Array.from(new Set((player.sources||[]).concat([pageUrl])))
+  };
+}
+
+function mergePlayers(list) {
+  const map = new Map();
+  for (const p of list) {
+    const key = (p.name||"").trim().toLowerCase();
+    if (!key) continue;
+    if (!map.has(key)) map.set(key,p);
+    else {
+      const existing = map.get(key);
+      existing.aliases = Array.from(new Set((existing.aliases||[]).concat(p.aliases||[])));
+      existing.sources = Array.from(new Set((existing.sources||[]).concat(p.sources||[])));
+      if (!existing.nationality && p.nationality) existing.nationality = p.nationality;
+      existing.positions = Array.from(new Set((existing.positions||[]).concat(p.positions||[])));
+      if (!existing.firstYear && p.firstYear) existing.firstYear = p.firstYear;
+      if (!existing.lastYear && p.lastYear) existing.lastYear = p.lastYear;
+      existing.clubLegend = existing.clubLegend || p.clubLegend;
+    }
+  }
+  return Array.from(map.values());
+}
+
+(async function main() {
+  console.log("Starting enriched scrape of Rangers players...");
+  const candidates = await parseWikipediaList();
+  if (!candidates || candidates.length === 0) {
+    console.error("No candidates found. Exiting.");
+    process.exit(1);
+  }
+  const limit = pLimit(CONCURRENCY);
+  const tasks = candidates.map((c, idx) => limit(async () => {
+    try {
+      const enriched = await enrichPlayer(c);
+      console.log(`[${idx+1}/${candidates.length}] ${enriched.name}`);
+      return enriched;
+    } catch (err) {
+      console.error("Error enriching", c.name, err && err.message);
+      return { name: c.name, aliases: c.aliases||[c.name], nationality:null, positions:[], firstYear:null, lastYear:null, clubLegend:false, sources:c.sources||[] };
+    }
+  }));
+  const enrichedList = await Promise.all(tasks);
+  const merged = mergePlayers(enrichedList);
+  merged.sort((a,b)=>a.name.localeCompare(b.name));
+  await fs.writeJson(OUTPUT_FILE, merged, { spaces: 2 });
+  console.log(`Saved ${merged.length} enriched player records to ${OUTPUT_FILE}`);
+})();
+EOF
+          fi
+
+          # data/players.sample.json
+          if [ -e "data/players.sample.json" ]; then
+            echo "SKIP: data/players.sample.json exists"
+          else
+            mkdir -p data
+            cat > data/players.sample.json <<'EOF'
+[
+  {
+    "name": "Ally McCoist",
+    "aliases": ["Ally McCoist", "McCoist"],
+    "nationality": "Scotland",
+    "positions": ["Striker"],
+    "firstYear": 1983,
+    "lastYear": 2001,
+    "clubLegend": true,
+    "sources": ["https://en.wikipedia.org/wiki/Ally_McCoist"]
+  },
+  {
+    "name": "Barry Ferguson",
+    "aliases": ["Barry Ferguson", "Ferguson"],
+    "nationality": "Scotland",
+    "positions": ["Midfielder"],
+    "firstYear": 1996,
+    "lastYear": 2013,
+    "clubLegend": true,
+    "sources": ["https://en.wikipedia.org/wiki/Barry_Ferguson"]
+  },
+  {
+    "name": "James Tavernier",
+    "aliases": ["James Tavernier", "Tavernier"],
+    "nationality": "England",
+    "positions": ["Defender"],
+    "firstYear": 2015,
+    "lastYear": null,
+    "clubLegend": false,
+    "sources": ["https://en.wikipedia.org/wiki/James_Tavernier"]
+  }
+]
+EOF
+          fi
+
+          # .github/workflows/scrape.yml (scheduled scraper)
+          if [ -e ".github/workflows/scrape.yml" ]; then
+            echo "SKIP: .github/workflows/scrape.yml exists"
+          else
+            mkdir -p .github/workflows
+            cat > .github/workflows/scrape.yml <<'EOF'
+name: Scrape and Update players.enriched.json
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 3 * * 1'
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install dependencies
+        run: |
+          npm ci || npm install axios cheerio p-limit fs-extra
+
+      - name: Run scraper
+        run: |
+          node scripts/scrape-rangers-players-enriched.js
+
+      - name: Commit and push updated output
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add output/players.enriched.json || true
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore: update players.enriched.json (scheduled scrape)"
+            git push origin HEAD:${{ github.ref_name }}
+          fi
+EOF
+          fi
+
+          # README_SETUP.md
+          if [ -e "README_SETUP.md" ]; then
+            echo "SKIP: README_SETUP.md exists"
+          else
+            cat > README_SETUP.md <<'EOF'
+Rangers Mark — setup notes
+
+Files created:
+- index.html
+- scripts/scrape-rangers-players-enriched.js
+- data/players.sample.json
+- .github/workflows/scrape.yml
+- output/.gitkeep
+
+To run locally:
+1. Install node deps:
+   npm init -y
+   npm install axios cheerio p-limit fs-extra
+
+2. Run the scraper to create output/players.enriched.json:
+   node scripts/scrape-rangers-players-enriched.js
+
+3. Copy the generated JSON to the data folder for the frontend:
+   cp output/players.enriched.json data/players.enriched.json
+
+4. Serve the site:
+   npx http-server . -p 8080
+   Open http://localhost:8080/index.html
+
+Notes:
+- Inspect scripts/scrape-rangers-players-enriched.js and obey robots.txt for target sites.
+- The GitHub Action will attempt to run the scraper and commit output/players.enriched.json if configured.
+EOF
+          fi
+
+          # output/.gitkeep
+          if [ -e "output/.gitkeep" ]; then
+            echo "SKIP: output/.gitkeep exists"
+          else
+            mkdir -p output
+            touch output/.gitkeep
+            echo "CREATED: output/.gitkeep"
+          fi
+
+      - name: Commit files
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add index.html scripts data .github README_SETUP.md output || true
+          if git diff --staged --quiet; then
+            echo "No new files to commit"
+          else
+            git commit -m "chore: init Rangers Mark project files"
+            git push origin HEAD:${{ github.ref_name }}
+          fi
+
+      - name: Done
+        run: echo "Initialization complete. Check your repository for new files."
